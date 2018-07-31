@@ -321,8 +321,8 @@ type Iterator struct {
 // Using prefetch is highly recommended if you're doing a long running iteration.
 // Avoid long running iterations in update transactions.
 func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
-	if atomic.AddInt32(&txn.numIterators, 1) > 1 {
-		panic("Only one iterator can be active at one time.")
+	if atomic.AddInt32(&txn.numIterators, 1) > 10 {
+		panic("Cannot have more than 10 active iterators")
 	}
 
 	tables, decr := txn.db.getMemTables()
