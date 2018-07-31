@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dgraph-io/badger/options"
@@ -314,6 +313,8 @@ type Iterator struct {
 	waste list
 
 	lastKey []byte // Used to skip over multiple versions of the same key.
+
+	closed bool
 }
 
 // NewIterator returns a new iterator. Depending upon the options, either only keys, or both
@@ -321,10 +322,6 @@ type Iterator struct {
 // Using prefetch is highly recommended if you're doing a long running iteration.
 // Avoid long running iterations in update transactions.
 func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
-	if atomic.AddInt32(&txn.numIterators, 1) > 10 {
-		panic("Cannot have more than 10 active iterators")
-	}
-
 	tables, decr := txn.db.getMemTables()
 	defer decr()
 	txn.db.vlog.incrIteratorCount()
@@ -342,6 +339,7 @@ func (txn *Txn) NewIterator(opt IteratorOptions) *Iterator {
 		opt:    opt,
 		readTs: txn.readTs,
 	}
+	txn.iterators = append(txn.iterators, res)
 	return res
 }
 
@@ -375,6 +373,9 @@ func (it *Iterator) ValidForPrefix(prefix []byte) bool {
 
 // Close would close the iterator. It is important to call this when you're done with iteration.
 func (it *Iterator) Close() {
+	if it.closed {
+		return
+	}
 	it.iitr.Close()
 
 	// It is important to wait for the fill goroutines to finish. Otherwise, we might leave zombie
@@ -391,7 +392,13 @@ func (it *Iterator) Close() {
 
 	// TODO: We could handle this error.
 	_ = it.txn.db.vlog.decrIteratorCount()
-	atomic.AddInt32(&it.txn.numIterators, -1)
+	for index, _ := range it.txn.iterators {
+		if it == it.txn.iterators[index] {
+			it.txn.iterators = append(it.txn.iterators[:index], it.txn.iterators[index+1:]...)
+			break
+		}
+	}
+	it.closed = true
 }
 
 // Next would advance the iterator by one. Always check it.Valid() after a Next()
